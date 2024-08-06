@@ -1,363 +1,173 @@
 // License: See LICENSE file in root directory.
 // Copyright(c) 2022 Oradar Corporation. All Rights Reserved.
 
-#ifdef ROS_FOUND
-#include <ros/ros.h>
-#include <sensor_msgs/LaserScan.h>
-#elif ROS2_FOUND
-#include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/laser_scan.hpp>
-#endif
-#include <vector>
-#include <iostream>
-#include <string>
-#include <signal.h>
-#include <cmath>
-#include "src/ord_lidar_driver.h"
-#include <sys/time.h>
+#include "oradar_scan_node.hpp"
 
-using namespace std;
-using namespace ordlidar;
-
-#define Degree2Rad(X) ((X)*M_PI / 180.)
-#ifdef ROS_FOUND
-void publish_msg(ros::Publisher *pub, full_scan_data_st *scan_frame, ros::Time start,
-                 double scan_time, std::string frame_id, bool clockwise,
-                 double angle_min, double angle_max, double min_range, double max_range)
+OradarScanNode::OradarScanNode(std::string node_name)
+  : Node(std::move(node_name)), device_(ORADAR_TYPE_SERIAL, ORADAR_MS200)
 {
-  sensor_msgs::LaserScan scanMsg;
+  declareParameters();
+
+  if (!connectToLidar()) { return; }
+
+  double min_threshold = static_cast<double>(motor_speed_) - (static_cast<double>(motor_speed_) * 0.1);
+  double max_threshold = static_cast<double>(motor_speed_) + (static_cast<double>(motor_speed_) * 0.1);
+  double current_speed = device_.GetRotationSpeed();
+  if (current_speed < min_threshold || current_speed > max_threshold) { device_.SetRotationSpeed(motor_speed_); }
+
+
+  scan_pub_ = this->create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, 10);
+
+  timer_ = this->create_wall_timer(std::chrono::seconds(1), [this]() {});
+}
+
+void OradarScanNode::declareParameters()
+{
+  this->declare_parameter<std::string>("port_name", port_);
+  this->declare_parameter<int>("baudrate", baudrate_);
+  this->declare_parameter<double>("angle_max", angle_max_);
+  this->declare_parameter<double>("angle_min", angle_min_);
+  this->declare_parameter<double>("range_max", max_range_);
+  this->declare_parameter<double>("range_min", min_range_);
+  this->declare_parameter<bool>("clockwise", clockwise_);
+  this->declare_parameter<int>("motor_speed", motor_speed_);
+  this->declare_parameter<std::string>("device_model", device_model_);
+  this->declare_parameter<std::string>("frame_id", frame_id_);
+  this->declare_parameter<std::string>("scan_topic", scan_topic_);
+
+  this->get_parameter("port_name", port_);
+  this->get_parameter("baudrate", baudrate_);
+  this->get_parameter("angle_max", angle_max_);
+  this->get_parameter("angle_min", angle_min_);
+  this->get_parameter("range_max", max_range_);
+  this->get_parameter("range_min", min_range_);
+  this->get_parameter("clockwise", clockwise_);
+  this->get_parameter("motor_speed", motor_speed_);
+  this->get_parameter("device_model", device_model_);
+  this->get_parameter("frame_id", frame_id_);
+  this->get_parameter("scan_topic", scan_topic_);
+}
+
+bool OradarScanNode::connectToLidar()
+{
+  if (port_.empty()) {
+    RCLCPP_ERROR(this->get_logger(), "Can't find lidar MS200 \n");
+    return false;
+  }
+
+  device_.SetSerialPort(port_, baudrate_);
+
+  RCLCPP_INFO(this->get_logger(), "Get lidar type: %s \n", device_model_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Get serial port: %s, baudrate: %d \n", port_.c_str(), baudrate_);
+
+  while (rclcpp::ok()) {
+    if (device_.isConnected()) {
+      device_.Disconnect();
+      RCLCPP_INFO(this->get_logger(), "Disconnect lidar _. \n");
+    }
+
+    if (device_.Connect()) {
+      RCLCPP_INFO(this->get_logger(),"Lidar device connected successfully. \n");
+      return true;
+    } else {
+      RCLCPP_INFO(this->get_logger(),"Lidar device connecting... \n");
+      sleep(1);
+    }
+  }
+  return false;
+}
+
+void OradarScanNode::scanAndPublish()
+{
+
+  full_scan_data_st scan_data;
+  rclcpp::Time start_scan_time;
+  rclcpp::Time end_scan_time;
+  double scan_duration;
+  bool grab;
+
+  while (rclcpp::ok()) {
+    start_scan_time = this->now();
+    grab = device_.GrabFullScanBlocking(scan_data, 1000);
+    scan_duration = (end_scan_time.seconds() - start_scan_time.seconds());
+    if (grab) { publishScan(&scan_data, start_scan_time, scan_duration); }
+  }
+}
+double OradarScanNode::degToRad(const double deg) { return deg * M_PI / 180.0; }
+
+void OradarScanNode::publishScan(full_scan_data_st *scan_frame, rclcpp::Time start_time, double scan_time)
+{
+  auto scan_msg = sensor_msgs::msg::LaserScan();
   int point_nums = scan_frame->vailtidy_point_num;
 
-  scanMsg.header.stamp = start;
-  scanMsg.header.frame_id = frame_id;
-  scanMsg.angle_min = Degree2Rad(scan_frame->data[0].angle);
-  scanMsg.angle_max = Degree2Rad(scan_frame->data[point_nums - 1].angle);
+  scan_msg.header.stamp = start_time;
+  scan_msg.header.frame_id = frame_id_;
+  scan_msg.angle_min = degToRad(scan_frame->data[0].angle);
+  scan_msg.angle_max = degToRad(scan_frame->data[point_nums - 1].angle);
   double diff = scan_frame->data[point_nums - 1].angle - scan_frame->data[0].angle;
-  scanMsg.angle_increment = Degree2Rad(diff/point_nums);
-  scanMsg.scan_time = scan_time;
-  scanMsg.time_increment = scan_time / point_nums;
-  scanMsg.range_min = min_range;
-  scanMsg.range_max = max_range;
+  scan_msg.angle_increment = degToRad(diff / point_nums);
+  scan_msg.scan_time = scan_time;
+  scan_msg.time_increment = scan_time / point_nums;
+  scan_msg.range_min = min_range_;
+  scan_msg.range_max = max_range_;
 
-  scanMsg.ranges.assign(point_nums, std::numeric_limits<float>::quiet_NaN());
-  scanMsg.intensities.assign(point_nums, std::numeric_limits<float>::quiet_NaN());
+  scan_msg.ranges.assign(point_nums, std::numeric_limits<float>::quiet_NaN());
+  scan_msg.intensities.assign(point_nums, std::numeric_limits<float>::quiet_NaN());
 
-  float range = 0.0;
-  float intensity = 0.0;
-  float dir_angle = 0.0;
-  unsigned int last_index = 0;
-  //printf("point_nums:%d, diff:%f, angle_increment:%f\n", point_nums, diff,scanMsg.angle_increment);
-  for (int i = 0; i < point_nums; i++)
-  {
+  double range = 0.0;
+  double intensity = 0.0;
+  double dir_angle;
+  uint32_t last_index = 0;
+
+  for (size_t i = 0; i < point_nums; i++) {
     range = scan_frame->data[i].distance * 0.001;
     intensity = scan_frame->data[i].intensity;
 
-    if ((range > max_range) || (range < min_range))
-    {
+    if ((range > max_range_) || (range < min_range_)) {
       range = 0.0;
       intensity = 0.0;
     }
 
-    if (!clockwise)
-    {
-      dir_angle = static_cast<float>(360.f - scan_frame->data[i].angle);
-    }
-    else
-    {
+    if (!clockwise_) {
+      dir_angle = static_cast<double>(360.0 - scan_frame->data[i].angle);
+    } else {
       dir_angle = scan_frame->data[i].angle;
     }
 
-    if ((dir_angle < angle_min) || (dir_angle > angle_max))
-    {
+    if ((dir_angle < angle_min_) || (dir_angle > angle_max_)) {
       range = 0;
       intensity = 0;
     }
 
-    float angle = Degree2Rad(dir_angle);
-    unsigned int index = (unsigned int)((angle - scanMsg.angle_min) / scanMsg.angle_increment);
-    if (index < point_nums)
-    {
+    double angle = degToRad(dir_angle);
+    uint32_t index = static_cast<uint32_t>((angle - scan_msg.angle_min) / scan_msg.angle_increment);
+    if (index < point_nums) {
       // If the current content is Nan, it is assigned directly
-      if (std::isnan(scanMsg.ranges[index]))
-      {
-        scanMsg.ranges[index] = range;
-        unsigned int err = index - last_index;
-        if (err == 2)
-        {
-          scanMsg.ranges[index - 1] = range;
-          scanMsg.intensities[index - 1] = intensity;
+      if (std::isnan(scan_msg.ranges[index])) {
+        scan_msg.ranges[index] = range;
+        uint32_t err = index - last_index;
+        if (err == 2) {
+          scan_msg.ranges[index - 1] = range;
+          scan_msg.intensities[index - 1] = intensity;
         }
-      }
-      else
-      { // Otherwise, only when the distance is less than the current
+      } else {// Otherwise, only when the distance is less than the current
         //   value, it can be re assigned
-        if (range < scanMsg.ranges[index])
-        {
-          scanMsg.ranges[index] = range;
-        }
+        if (range < scan_msg.ranges[index]) { scan_msg.ranges[index] = range; }
       }
-      scanMsg.intensities[index] = intensity;
+      scan_msg.intensities[index] = intensity;
       last_index = index;
     }
   }
 
-  pub->publish(scanMsg);
+  scan_pub_->publish(scan_msg);
 }
-
-#elif ROS2_FOUND
-void publish_msg(rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr &pub, full_scan_data_st *scan_frame, rclcpp::Time start,
-                 double scan_time, std::string frame_id, bool clockwise,
-                 double angle_min, double angle_max, double min_range, double max_range)
-{
-  sensor_msgs::msg::LaserScan scanMsg;
-  int point_nums = scan_frame->vailtidy_point_num;
-
-  scanMsg.header.stamp = start;
-  scanMsg.header.frame_id = frame_id;
-  scanMsg.angle_min = Degree2Rad(scan_frame->data[0].angle);
-  scanMsg.angle_max = Degree2Rad(scan_frame->data[point_nums - 1].angle);
-  double diff = scan_frame->data[point_nums - 1].angle - scan_frame->data[0].angle;
-  scanMsg.angle_increment = Degree2Rad(diff/point_nums);
-  scanMsg.scan_time = scan_time;
-  scanMsg.time_increment = scan_time / point_nums;
-  scanMsg.range_min = min_range;
-  scanMsg.range_max = max_range;
-
-  scanMsg.ranges.assign(point_nums, std::numeric_limits<float>::quiet_NaN());
-  scanMsg.intensities.assign(point_nums, std::numeric_limits<float>::quiet_NaN());
-
-  float range = 0.0;
-  float intensity = 0.0;
-  float dir_angle;
-  unsigned int last_index = 0;
-
-  for (int i = 0; i < point_nums; i++)
-  {
-    range = scan_frame->data[i].distance * 0.001;
-    intensity = scan_frame->data[i].intensity;
-
-    if ((range > max_range) || (range < min_range))
-    {
-      range = 0.0;
-      intensity = 0.0;
-    }
-
-    if (!clockwise)
-    {
-      dir_angle = static_cast<float>(360.f - scan_frame->data[i].angle);
-    }
-    else
-    {
-      dir_angle = scan_frame->data[i].angle;
-    }
-
-    if ((dir_angle < angle_min) || (dir_angle > angle_max))
-    {
-      range = 0;
-      intensity = 0;
-    }
-
-    float angle = Degree2Rad(dir_angle);
-    unsigned int index = (unsigned int)((angle - scanMsg.angle_min) / scanMsg.angle_increment);
-    if (index < point_nums)
-    {
-      // If the current content is Nan, it is assigned directly
-      if (std::isnan(scanMsg.ranges[index]))
-      {
-        scanMsg.ranges[index] = range;
-        unsigned int err = index - last_index;
-        if (err == 2)
-        {
-          scanMsg.ranges[index - 1] = range;
-          scanMsg.intensities[index - 1] = intensity;
-        }
-      }
-      else
-      { // Otherwise, only when the distance is less than the current
-        //   value, it can be re assigned
-        if (range < scanMsg.ranges[index])
-        {
-          scanMsg.ranges[index] = range;
-        }
-      }
-      scanMsg.intensities[index] = intensity;
-      last_index = index;
-    }
-  }
-
-  pub->publish(scanMsg);
-}
-#endif
 
 int main(int argc, char **argv)
 {
-  std::string frame_id, scan_topic;
-  std::string port;
-  std::string device_model;
-
-  double min_thr = 0.0, max_thr = 0.0, cur_speed = 0.0;
-  int baudrate = 230400;
-  int motor_speed = 10;
-  double angle_min = 0.0, angle_max = 360.0;
-  double min_range = 0.05, max_range = 20.0;
-  bool clockwise = false;
-  uint8_t type = ORADAR_TYPE_SERIAL;
-  int model = ORADAR_MS200;
-#ifdef ROS_FOUND
-  ros::init(argc, argv, "oradar_ros");
-
-  ros::NodeHandle nh;
-  ros::NodeHandle nh_private("~");
-  nh_private.param<std::string>("port_name", port, "/dev/ttyUSB0");
-  nh_private.param<int>("baudrate", baudrate, 230400);
-  nh_private.param<double>("angle_max", angle_max, 180.00);
-  nh_private.param<double>("angle_min", angle_min, -180.00);
-  nh_private.param<double>("range_max", max_range, 20.0);
-  nh_private.param<double>("range_min", min_range, 0.05);
-  nh_private.param<bool>("clockwise", clockwise, false);
-  nh_private.param<int>("motor_speed", motor_speed, 10);
-  nh_private.param<std::string>("device_model", device_model, "ms200");
-  nh_private.param<std::string>("frame_id", frame_id, "laser_frame");
-  nh_private.param<std::string>("scan_topic", scan_topic, "scan");
-  ros::Publisher scan_pub = nh.advertise<sensor_msgs::LaserScan>(scan_topic, 10);
-
-  #elif ROS2_FOUND
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<rclcpp::Node>("oradar_ros"); // create a ROS2 Node
-
-    // declare ros2 param
-  node->declare_parameter<std::string>("port_name", port);
-  node->declare_parameter<int>("baudrate", baudrate);
-  node->declare_parameter<double>("angle_max", angle_max);
-  node->declare_parameter<double>("angle_min", angle_min);
-  node->declare_parameter<double>("range_max", max_range);
-  node->declare_parameter<double>("range_min", min_range);
-  node->declare_parameter<bool>("clockwise", clockwise);
-  node->declare_parameter<int>("motor_speed", motor_speed);
-  node->declare_parameter<std::string>("device_model", device_model);
-  node->declare_parameter<std::string>("frame_id", frame_id);
-  node->declare_parameter<std::string>("scan_topic", scan_topic);
-
-  // get ros2 param
-  node->get_parameter("port_name", port);
-  node->get_parameter("baudrate", baudrate);
-  node->get_parameter("angle_max", angle_max);
-  node->get_parameter("angle_min", angle_min);
-  node->get_parameter("range_max", max_range);
-  node->get_parameter("range_min", min_range);
-  node->get_parameter("clockwise", clockwise);
-  node->get_parameter("motor_speed", motor_speed);
-  node->get_parameter("device_model", device_model);
-  node->get_parameter("frame_id", frame_id);
-  node->get_parameter("scan_topic", scan_topic);
-
-  rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr publisher = node->create_publisher<sensor_msgs::msg::LaserScan>(scan_topic, 10);
-  #endif
-
-  OrdlidarDriver device(type, model);
-  bool ret = false;
-
-  if (port.empty())
-  {
-    std::cout << "can't find lidar ms200" << std::endl;
-  }
-  else
-  {
-    device.SetSerialPort(port, baudrate);
-
-    std::cout << "get lidar type:"  << device_model.c_str() << std::endl;
-    std::cout << "get serial port:"  << port.c_str() << ", baudrate:"  << baudrate << std::endl;
-    #ifdef ROS_FOUND
-    while (ros::ok())
-    #elif ROS2_FOUND
-    while (rclcpp::ok())
-    #endif
-    {
-      if (device.isConnected() == true)
-      {
-        device.Disconnect();
-        std::cout << "Disconnect lidar device." << std::endl;
-      }
-
-      if (device.Connect())
-      {
-        std::cout << "lidar device connect succuss." << std::endl;
-        break;
-      }
-      else
-      {
-        std::cout << "lidar device connecting..." << std::endl;
-        sleep(1);
-      }
-    }
-
-    full_scan_data_st scan_data;
-    #ifdef ROS_FOUND
-    ros::Time start_scan_time;
-    ros::Time end_scan_time;
-    #elif ROS2_FOUND
-    rclcpp::Time start_scan_time;
-    rclcpp::Time end_scan_time;
-    #endif
-    double scan_duration;
-
-    std::cout << "get lidar scan data" << std::endl;
-    std::cout << "ROS topic:" << scan_topic.c_str() << std::endl;
-    
-		min_thr = (double)motor_speed - ((double)motor_speed  * 0.1);
-		max_thr = (double)motor_speed + ((double)motor_speed  * 0.1);
-    cur_speed = device.GetRotationSpeed();
-    if(cur_speed < min_thr || cur_speed > max_thr)
-    {
-      device.SetRotationSpeed(motor_speed);
-    }
-    
-
-    #ifdef ROS_FOUND
-    while (ros::ok())
-    #elif ROS2_FOUND
-    while (rclcpp::ok())
-    #endif
-    {
-      #ifdef ROS_FOUND
-      start_scan_time = ros::Time::now();
-      #elif ROS2_FOUND
-      start_scan_time = node->now();
-      #endif
-      ret = device.GrabFullScanBlocking(scan_data, 1000);
-      #ifdef ROS_FOUND
-      end_scan_time = ros::Time::now();
-      scan_duration = (end_scan_time - start_scan_time).toSec();
-      #elif ROS2_FOUND
-      end_scan_time = node->now();
-      scan_duration = (end_scan_time.seconds() - start_scan_time.seconds());
-      #endif
-      
-
-      
-      if (ret)
-      {
-        #ifdef ROS_FOUND
-        publish_msg(&scan_pub, &scan_data, start_scan_time, scan_duration, frame_id,
-                    clockwise, angle_min, angle_max, min_range, max_range);
-        #elif ROS2_FOUND
-        publish_msg(publisher, &scan_data, start_scan_time, scan_duration, frame_id,
-            clockwise, angle_min, angle_max, min_range, max_range);
-        #endif
-
-      }
-    }
-
-    device.Disconnect();
-    
-  }
-
-  std::cout << "publish node end.." << std::endl;
-  #ifdef ROS_FOUND
-  ros::shutdown();
-  #elif ROS2_FOUND
+  auto lidar_node = std::make_shared<OradarScanNode>("oradar_ros");
+  rclcpp::spin(lidar_node);
   rclcpp::shutdown();
-  #endif
-  
+
   return 0;
 }

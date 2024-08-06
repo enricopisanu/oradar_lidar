@@ -1,0 +1,7 @@
+{
+    "C_Cpp.default.compilerPath": "/usr/bin/g++-13",
+    "files.associations": {
+        "chrono": "cpp",
+        "cmath": "cpp"
+    }
+}

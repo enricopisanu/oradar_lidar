@@ -734,7 +734,7 @@ bool Serial::SerialImpl::open() {
   // Compensate for the stopbits_one_point_five enum being equal to int 3,
   // and not 1.5.
   if (stopbits_ == stopbits_one_point_five) {
-    byte_time_ns_ += ((1.5 - stopbits_one_point_five) * bit_time_ns);
+    byte_time_ns_ += ((1.5 - static_cast<double>(stopbits_one_point_five)) * bit_time_ns);
   }
 
   is_open_ = true;

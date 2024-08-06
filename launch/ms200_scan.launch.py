@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
@@ -22,8 +21,8 @@ def generate_launch_description():
   # LiDAR publisher node
   ordlidar_node = Node(
       package='oradar_lidar',
-      node_executable='oradar_scan',
-      node_name='MS200',
+      executable='oradar_scan',
+      name='MS200',
       output='screen',
       parameters=[
         {'device_model': 'MS200'},
@@ -43,8 +42,8 @@ def generate_launch_description():
   # base_link to laser_frame tf node
   base_link_to_laser_tf_node = Node(
     package='tf2_ros',
-    node_executable='static_transform_publisher',
-    node_name='base_link_to_base_laser',
+    executable='static_transform_publisher',
+    name='base_link_to_base_laser',
     arguments=['0','0','0.18','0','0','0','base_link','laser_frame']
   )
 
