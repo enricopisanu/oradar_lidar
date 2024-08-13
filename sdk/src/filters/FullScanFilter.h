@@ -17,19 +17,18 @@ typedef struct FilterParas
 {
   int filter_type = 0;
 
-  int maxRange = 150;
-  int minRange = 0;
+  int max_range = 150;
+  int min_range = 0;
 
 
-  int Sigma_D = 5;
-  int Sigma_R = 3;
+  int sigma_d = 5;
+  int sigma_r = 3;
 
-  int IntesntiyFilterRange = 70;/// 距离
-  int Weak_Intensity_Th = 31;// 弱信号强度
+  int intensity_filter_range = 70;
+  int weak_intensity_th = 31;
 
-  // 拖尾滤波
-  int Rotation = 10;// 转速，默认,10hz
-  int level = 0;// 滤波强度，默认，8°2个点
+  int rotation = 10;
+  int level = 0;
 } FilterPara;
 
 
@@ -58,8 +57,8 @@ protected:
 
   bool isValidRange(FilterPara ParaInf, uint16_t current_data);
 
-  void swap(uint16_t *a, uint16_t *b);
-  void BubbleSort(uint16_t *data, int len);
+  static void swap(uint16_t *a, uint16_t *b);
+  static void BubbleSort(uint16_t *data, int len);
 
 protected:
   static const int FILTER_WINDOW_SIZE = 3;// 5;

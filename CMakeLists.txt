@@ -1,26 +1,18 @@
 cmake_minimum_required(VERSION 3.5)
 project(oradar_lidar)
 
-#=======================================
-# Compile setup (CATKIN, COLCON)
-#=======================================
-set(COMPILE_METHOD COLCON)
-
 set(CMAKE_BUILD_TYPE RELEASE)
 
 add_definitions(-O3)
 
-# find dependencies
+# Find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/package_ros2.xml ${CMAKE_CURRENT_SOURCE_DIR}/package.xml COPYONLY)
-add_definitions(-DROS2_FOUND)
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/package_ros2.xml ${CMAKE_CURRENT_SOURCE_DIR}/package.xml COPYONLY)
-
 set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(GCC_WARNINGS
     -Wall
@@ -57,7 +49,7 @@ include_directories(${rclcpp_INCLUDE_DIRS})
 set(ORADAR_SDK_DIR "sdk")
 add_subdirectory(${ORADAR_SDK_DIR})
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${ORADAR_SDK_DIR} include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${ORADAR_SDK_DIR} ${CMAKE_SOURCE_DIR}/include)
 
 add_executable(oradar_scan ${CMAKE_CURRENT_SOURCE_DIR}/src/oradar_scan_node.cpp)
 

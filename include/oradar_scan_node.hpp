@@ -13,7 +13,7 @@ class OradarScanNode : public rclcpp::Node
 {
 public:
   explicit OradarScanNode(std::string node_name);
-  ~OradarScanNode() { device_.Disconnect(); }
+  ~OradarScanNode() { device_.disconnect(); }
   OradarScanNode(const OradarScanNode &other) = default;
   OradarScanNode &operator=(const OradarScanNode &other) = default;
   OradarScanNode(OradarScanNode &&other) noexcept = default;

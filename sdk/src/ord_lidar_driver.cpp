@@ -1,16 +1,9 @@
 #include "ord_lidar_driver.h"
-#include <cmath>
-#include <core/base/utils.h>
-#include <core/network/ActiveSocket.h>
-#include <core/serial/common.h>
-#include <core/serial/serial.h>
-#include <csignal>
 
 namespace ordlidar {
 #define DEFAULT_TIMEOUT (2000)
 // clang-format off
-static const uint8_t CrcTable[256] =
-	{
+static constexpr std::array<uint8_t, 256> crc_table{
 		0x00, 0x4d, 0x9a, 0xd7, 0x79, 0x34, 0xe3,
 		0xae, 0xf2, 0xbf, 0x68, 0x25, 0x8b, 0xc6, 0x11, 0x5c, 0xa9, 0xe4, 0x33,
 		0x7e, 0xd0, 0x9d, 0x4a, 0x07, 0x5b, 0x16, 0xc1, 0x8c, 0x22, 0x6f, 0xb8,
@@ -37,30 +30,26 @@ static const uint8_t CrcTable[256] =
 
 OrdlidarDriver::OrdlidarDriver(uint8_t type, int model)
   : serial_(nullptr), rx_thread_(nullptr), baudrate_(0), is_connected_(false), tranformer_type_(type), model_(model),
-    valid_data_(0), init_info_flag_(0)
-{
-  memset(&parsed_data_, 0, sizeof(parsed_data_st));
-  memset(&temp_data, 0, sizeof(full_scan_data_st));
-  memset(&full_scan_data_, 0, sizeof(full_scan_data_st));
-  memset(&one_scan_data_, 0, sizeof(one_scan_data_st));
-}
+    valid_data_(false), init_info_flag_(0), full_scan_ready_{ false }, one_scan_ready_{ false },
+    rx_thread_exit_flag_{ false }, parsed_data_{}, temp_data{}, full_scan_data_{}, one_scan_data_{}
+{}
 
-OrdlidarDriver::~OrdlidarDriver() { Disconnect(); }
+OrdlidarDriver::~OrdlidarDriver() { disconnect(); }
 
-bool OrdlidarDriver::SetSerialPort(const std::string &port_name, const uint32_t &baudrate)
+auto OrdlidarDriver::setSerialPort(const std::string &port_name, uint32_t baudrate) -> void
 {
   port_name_ = port_name;
   baudrate_ = baudrate;
-  return true;
 }
 
-bool OrdlidarDriver::Connect()
+[[nodiscard]] auto OrdlidarDriver::connect() -> bool
 {
-  if (isConnected()) { Disconnect(); }
+  if (isConnected()) { disconnect(); }
 
   if (!serial_) {
     if (tranformer_type_ == ORADAR_TYPE_SERIAL) {
-      serial_ = new serial::Serial(port_name_, baudrate_, serial::Timeout::simpleTimeout(DEFAULT_TIMEOUT));
+      serial_ =
+        std::make_unique<serial::Serial>(port_name_, baudrate_, serial::Timeout::simpleTimeout(DEFAULT_TIMEOUT));
     }
     // serial_->bindport(port_name_, baudrate_);
   }
@@ -72,16 +61,16 @@ bool OrdlidarDriver::Connect()
 
     is_connected_ = true;
     rx_thread_exit_flag_ = false;
-    rx_thread_ = new std::thread(mRxThreadProc, this);
-    delay(200);
+    rx_thread_ = std::make_unique<std::thread>(mRxThreadProc, this);
+    delay(SHORT_DELAY_MS);
   }
 
   return is_connected_;
 }
 
-bool OrdlidarDriver::isConnected() const { return is_connected_; }
+[[nodiscard]] auto OrdlidarDriver::isConnected() const noexcept -> bool { return is_connected_; }
 
-bool OrdlidarDriver::uart_data_find_init_info(unsigned char *data, int len)
+void OrdlidarDriver::uartDataFindInitInfo(unsigned char *data, int len)
 {
   cmd_buf_.insert(cmd_buf_.end(), data, data + len);
   int cmd_buf_len = cmd_buf_.size();
@@ -156,9 +145,9 @@ bool OrdlidarDriver::uart_data_find_init_info(unsigned char *data, int len)
   }
 }
 
-bool OrdlidarDriver::uart_data_handle(unsigned char *data, int len)
+bool OrdlidarDriver::uartDataHandle(unsigned char *data, int len)
 {
-  // printf("uart_data_handle, len= %d\n", len);
+  // printf("uartDataHandle, len= %d\n", len);
   for (int i = 0; i < len; i++) { bin_buf_.push_back(*(data + i)); }
 
   if (bin_buf_.size() < sizeof(OradarLidarFrame)) { return false; }
@@ -200,7 +189,7 @@ bool OrdlidarDriver::uart_data_handle(unsigned char *data, int len)
       OradarLidarFrame *pkg = (OradarLidarFrame *)bin_buf_.data();
       crc_check = 0;
       for (uint32_t i = 0; i < sizeof(OradarLidarFrame) - 1; i++) {
-        crc_check = CrcTable[(crc_check ^ bin_buf_[i]) & 0xff];
+        crc_check = crc_table[(crc_check ^ bin_buf_[i]) & 0xff];
       }
 
       if (crc_check == pkg->crc8) {
@@ -211,9 +200,9 @@ bool OrdlidarDriver::uart_data_handle(unsigned char *data, int len)
         parsed_data_.timestamp = pkg->timestamp;
 
         if (temp_data.vailtidy_point_num + parsed_data_.point_num < POINT_CIRCLE_MAX_SIZE) {
-          // point_data_parse_frame_ms200(&temp_data.data[temp_data.vailtidy_point_num], (unsigned char *)pkg->point,
+          // pointDataParseFrameMs200(&temp_data.data[temp_data.vailtidy_point_num], (unsigned char *)pkg->point,
           // parsed_data_.point_num * 3, parsed_data_.start_angle, parsed_data_.end_angle);
-          point_data_parse_frame_ms200(&temp_data.data[temp_data.vailtidy_point_num], pkg);
+          pointDataParseFrameMs200(&temp_data.data[temp_data.vailtidy_point_num], pkg);
           if (parsed_data_.point_num < POINT_PKG_MAX_SIZE) {
             // one package data
             memcpy(&one_scan_data_.data[0],
@@ -286,32 +275,32 @@ void OrdlidarDriver::mRxThreadProc(void *arg)
     // retval = lidar_ptr->serial_->available();
     retval = lidar_ptr->serial_->waitfordata(wait_size, 500, &recv_size);
     if (retval == 0) {
-      lidar_ptr->valid_data_ = 1;
+      lidar_ptr->valid_data_ = true;
       actual_read = lidar_ptr->serial_->readData(readbuf, recv_size);
       if (actual_read > 0) {
         switch (lidar_ptr->model_) {
         case ORADAR_MS200: {
-          lidar_ptr->uart_data_handle(readbuf, actual_read);
-          if (lidar_ptr->init_info_flag_) { lidar_ptr->uart_data_find_init_info(readbuf, actual_read); }
+          lidar_ptr->uartDataHandle(readbuf, actual_read);
+          if (lidar_ptr->init_info_flag_) { lidar_ptr->uartDataFindInitInfo(readbuf, actual_read); }
           break;
         }
         }
       }
     } else {
-      lidar_ptr->valid_data_ = 0;
+      lidar_ptr->valid_data_ = false;
     }
   }
 }
 
-int OrdlidarDriver::point_data_parse_frame_ms200(point_data_t *data, OradarLidarFrame *pkg)
+int OrdlidarDriver::pointDataParseFrameMs200(point_data_t *data, OradarLidarFrame *pkg)
 {
 
-  if (data == NULL || pkg == NULL) { return -1; }
+  if (data == nullptr || pkg == nullptr) { return -1; }
 
   uint32_t diff = ((uint32_t)pkg->end_angle + 36000 - (uint32_t)pkg->start_angle) % 36000;
   float step = diff / (POINT_PER_PACK - 1) / 100.0;
-  float start = (double)pkg->start_angle / 100.0;
-  float end = (double)(pkg->end_angle % 36000) / 100.0;
+  float start = static_cast<double>(pkg->start_angle) / 100.0;
+  float end = static_cast<double>(pkg->end_angle % 36000) / 100.0;
 
   for (int i = 0; i < POINT_PER_PACK; i++) {
     data[i].distance = pkg->point[i].distance;
@@ -328,10 +317,10 @@ int OrdlidarDriver::point_data_parse_frame_ms200(point_data_t *data, OradarLidar
   return 0;
 }
 #if 0
-	int OrdlidarDriver::point_data_parse_frame_ms200(point_data_t *data, unsigned char *buf, unsigned short buf_len, float start_angle, float end_angle)
+	int OrdlidarDriver::pointDataParseFrameMs200(point_data_t *data, unsigned char *buf, unsigned short buf_len, float start_angle, float end_angle)
 	{
 
-		if (data == NULL || buf == NULL || buf_len == 0)
+		if (data == nullptr || buf == nullptr || buf_len == 0)
 		{
 			return -1;
 		}
@@ -367,13 +356,14 @@ int OrdlidarDriver::point_data_parse_frame_ms200(point_data_t *data, OradarLidar
 		return 0;
 	}
 #endif
-int OrdlidarDriver::read(unsigned char *data, int length)
-{
-  // return serial_port_->uart_read(serial_fd_, data, length);
-  return 0;
-}
 
-int OrdlidarDriver::write(unsigned char *data, int length)
+// int OrdlidarDriver::read(unsigned char *data, int length)
+// {
+//   // return serial_port_->uart_read(serial_fd_, data, length);
+//   return 0;
+// }
+
+[[nodiscard]] auto OrdlidarDriver::write(unsigned char *data, int length) -> int
 {
   int ret = 0;
 
@@ -383,46 +373,52 @@ int OrdlidarDriver::write(unsigned char *data, int length)
   return ret;
 }
 
-void OrdlidarDriver::Disconnect()
+void OrdlidarDriver::disconnect()
 {
   rx_thread_exit_flag_ = true;
   if (serial_) {
     if (serial_->isOpen()) { serial_->closePort(); }
   }
 
-  if ((rx_thread_ != nullptr) && rx_thread_->joinable()) {
+  if (rx_thread_ && rx_thread_->joinable()) {
     rx_thread_->join();
-    delete rx_thread_;
-    rx_thread_ = NULL;
+    rx_thread_.reset();
   }
 
-  ResetFullScanReady();
-  ResetOneScanReady();
+  resetFullScanReady();
+  resetOneScanReady();
 
   is_connected_ = false;
 }
 
-uint16_t OrdlidarDriver::GetTimestamp() const { return parsed_data_.timestamp; }
+uint16_t OrdlidarDriver::getTimestamp() const { return parsed_data_.timestamp; }
 
-double OrdlidarDriver::GetRotationSpeed() const { return parsed_data_.speed; }
+double OrdlidarDriver::getRotationSpeed() const { return parsed_data_.speed; }
 
-bool OrdlidarDriver::SetRotationSpeed(int speed)
+bool OrdlidarDriver::setRotationSpeed(int speed)
 {
   uart_comm_t request;
   uint16_t timeout = 0;
-  double cur_speed = 0.0, min_thr = 0.0, max_thr = 0.0;
+  double cur_speed = 0.0;
+  double min_thr = 0.0;
+  double max_thr = 0.0;
+
+  double min_speed = 5;
+  double max_speed = 15;
+
   bool return_value = false;
-  int set_flag = 0;
-  if (speed < 5) speed = 5;
-  if (speed > 15) speed = 15;
+  bool set_flag = false;
+
+  if (speed < min_speed) { speed = min_speed; }
+  if (speed > max_speed) { speed = max_speed; }
 
   if (valid_data_) {
-    set_flag = 1;
-    return_value = Deactive();
-    if (return_value != true) { return false; }
+    set_flag = true;
+    return_value = deactive();
+    if (!deactive()) { return false; }
   }
 
-  delay(400);
+  delay(MEDIUM_DELAY_MS);
   request.head_flag = HEAD_FLAG;
   request.cmd = SET_ROTATION_SPEED;
   request.cmd_type = WRITE_PARAM;
@@ -435,20 +431,15 @@ bool OrdlidarDriver::SetRotationSpeed(int speed)
   int ret = serial_->writeData((uint8_t *)&request, HEAD_LEN + request.payload_len + 3);
   if (ret == -1) { return false; }
 
-  if (set_flag) {
-    return_value = Activate();
-    if (return_value != true) { return false; }
-  } else {
-    return true;
-  }
+  if (set_flag) { return activate(); }
 
-  min_thr = (double)speed - ((double)speed * 0.1);
-  max_thr = (double)speed + ((double)speed * 0.1);
+  min_thr = static_cast<double>(speed) - (static_cast<double>(speed) * 0.1);
+  max_thr = static_cast<double>(speed) + (static_cast<double>(speed) * 0.1);
   return_value = false;
   while (timeout < SET_TIME_OUT) {
-    delay(1000);
-    cur_speed = GetRotationSpeed();
-    if (valid_data_ == 0) { break; }
+    delay(LONG_DELAY_MS);
+    cur_speed = getRotationSpeed();
+    if (!valid_data_) { break; }
     if ((cur_speed > min_thr) && (cur_speed < max_thr)) {
       return_value = true;
       break;
@@ -459,9 +450,9 @@ bool OrdlidarDriver::SetRotationSpeed(int speed)
   return return_value;
 }
 
-bool OrdlidarDriver::GetFirmwareVersion(std::string &top_fw_version, std::string &bot_fw_version)
+bool OrdlidarDriver::getFirmwareVersion(std::string &top_fw_version, std::string &bot_fw_version)
 {
-  if ((!top_fw_version_.empty()) && (!bot_fw_version_.empty())) {
+  if (!top_fw_version_.empty() && !bot_fw_version_.empty()) {
     top_fw_version = top_fw_version_;
     bot_fw_version = bot_fw_version_;
     return true;
@@ -472,7 +463,7 @@ bool OrdlidarDriver::GetFirmwareVersion(std::string &top_fw_version, std::string
   return false;
 }
 
-bool OrdlidarDriver::GetDeviceSN(std::string &device_sn)
+[[nodiscard]] auto OrdlidarDriver::getDeviceSN(std::string &device_sn) -> bool
 {
   if (!device_sn_.empty()) {
     device_sn = device_sn_;
@@ -484,15 +475,14 @@ bool OrdlidarDriver::GetDeviceSN(std::string &device_sn)
   return false;
 }
 
-bool OrdlidarDriver::Activate(void)
+[[nodiscard]] auto OrdlidarDriver::activate() -> bool
 {
   uart_comm_t request;
-  int ret = false;
   uint16_t timeout = 0;
 
   if (valid_data_) { return true; }
 
-  delay(400);// 防止连续调用，导致雷达无法处理
+  delay(MEDIUM_DELAY_MS);
   request.head_flag = HEAD_FLAG;
   request.cmd = SET_RUN_MODE;
   request.cmd_type = WRITE_PARAM;
@@ -504,24 +494,20 @@ bool OrdlidarDriver::Activate(void)
   int ret_value = serial_->writeData((uint8_t *)&request, HEAD_LEN + request.payload_len + 3);
   if (ret_value == -1) { return false; }
 
-  ret = false;
   while (timeout < SET_TIME_OUT) {
-    delay(1000);
-    if (valid_data_) {
-      ret = true;
-      break;
-    }
+    delay(LONG_DELAY_MS);
+    if (valid_data_) { return true; }
     timeout++;
   }
-  return ret;
+  return false;
 }
 
-bool OrdlidarDriver::Deactive(void)
+ [[nodiscard]] auto OrdlidarDriver::deactive() -> bool
 {
   uart_comm_t request;
   bool ret = false;
   uint16_t timeout = 0;
-  if (valid_data_ == 0) {
+  if (!valid_data_) {
     full_scan_data_.vailtidy_point_num = 0;
     one_scan_data_.vailtidy_point_num = 0;
     parsed_data_.timestamp = 0;
@@ -529,22 +515,22 @@ bool OrdlidarDriver::Deactive(void)
     return true;
   }
 
-  delay(400);// 防止连续调用，导致雷达无法处理
+  delay(MEDIUM_DELAY_MS);
   request.head_flag = HEAD_FLAG;
   request.cmd = SET_RUN_MODE;
   request.cmd_type = WRITE_PARAM;
   request.payload_len = 1;
   request.data[0] = 0X80;
-  request.data[1] = Utils::xor_check((uint8_t *)&request, HEAD_LEN + request.payload_len);
+  request.data[1] = Utils::xor_check(reinterpret_cast<uint8_t *>(&request), HEAD_LEN + request.payload_len);
   request.data[2] = 0x31;
   request.data[3] = 0xF2;
-  int ret_value = serial_->writeData((uint8_t *)&request, HEAD_LEN + request.payload_len + 3);
+  int ret_value = serial_->writeData(reinterpret_cast<uint8_t *>(&request), HEAD_LEN + request.payload_len + 3);
   if (ret_value == -1) { return false; }
 
   ret = false;
   while (timeout < SET_TIME_OUT) {
-    delay(1000);
-    if (valid_data_ == 0) {
+    delay(LONG_DELAY_MS);
+    if (!valid_data_) {
       full_scan_data_.vailtidy_point_num = 0;
       one_scan_data_.vailtidy_point_num = 0;
       parsed_data_.timestamp = 0;
@@ -558,7 +544,7 @@ bool OrdlidarDriver::Deactive(void)
   return ret;
 }
 
-bool OrdlidarDriver::GrabFullScanBlocking(full_scan_data_st &scan_data, int timeout_ms)
+[[nodiscard]] auto OrdlidarDriver::grabFullScanBlocking(full_scan_data_st &scan_data, int timeout_ms) -> bool
 {
   switch (full_data_event_.wait(timeout_ms)) {
   case Event::EVENT_TIMEOUT: {
@@ -566,9 +552,9 @@ bool OrdlidarDriver::GrabFullScanBlocking(full_scan_data_st &scan_data, int time
   }
   case Event::EVENT_OK: {
     // ScopedLocker l(lock_);
-    if (IsFullScanReady()) {
+    if (isFullScanReady()) {
       scan_data = full_scan_data_;
-      ResetFullScanReady();
+      resetFullScanReady();
       return true;
     }
   }
@@ -576,7 +562,7 @@ bool OrdlidarDriver::GrabFullScanBlocking(full_scan_data_st &scan_data, int time
   return false;
 }
 
-bool OrdlidarDriver::GrabOneScanBlocking(one_scan_data_st &scan_data, int timeout_ms)
+[[nodiscard]] auto OrdlidarDriver::grabOneScanBlocking(one_scan_data_st &scan_data, int timeout_ms) -> bool
 {
 
   switch (one_data_event_.wait(timeout_ms)) {
@@ -585,9 +571,9 @@ bool OrdlidarDriver::GrabOneScanBlocking(one_scan_data_st &scan_data, int timeou
 
   case Event::EVENT_OK: {
     // ScopedLocker l(lock_);
-    if (IsOneScanReady()) {
+    if (isOneScanReady()) {
       scan_data = one_scan_data_;
-      ResetOneScanReady();
+      resetFullScanReady();
       return true;
     }
   }
@@ -596,25 +582,23 @@ bool OrdlidarDriver::GrabOneScanBlocking(one_scan_data_st &scan_data, int timeou
   return false;
 }
 
-bool OrdlidarDriver::GrabFullScan(full_scan_data_st &scan_data)
+[[nodiscard]] auto OrdlidarDriver::grabFullScan(full_scan_data_st &scan_data) -> bool
 {
-  if (full_scan_data_.vailtidy_point_num == 0) { return false; }
-
-  if (!IsFullScanReady()) return false;
+  if (!isFullScanReady() || full_scan_data_.vailtidy_point_num == 0) { return false; }
 
   scan_data = full_scan_data_;
-  ResetFullScanReady();
+  resetFullScanReady();
   return true;
 }
 
-bool OrdlidarDriver::GrabOneScan(one_scan_data_st &scan_data)
+[[nodiscard]] auto OrdlidarDriver::grabOneScan(one_scan_data_st &scan_data) -> bool
 {
   if (one_scan_data_.vailtidy_point_num == 0) { return false; }
 
-  if (!IsOneScanReady()) return false;
+  if (!isOneScanReady()) { return false; }
 
   scan_data = one_scan_data_;
-  ResetOneScanReady();
+  resetFullScanReady();
   return true;
 }
 

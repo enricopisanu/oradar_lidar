@@ -34,11 +34,11 @@ int main(int argc, char *argv[])
     bool is_logging = false;
     bool ret = false;
     long long count = 0;
-    device.SetSerialPort(port_name, serialBaudrate);
+    device.setSerialPort(port_name, serialBaudrate);
 
     while (running)
     {
-        if (device.Connect())
+        if (device.connect())
         {
             printf("scan_frame_data lidar device connect succuss..\n");
             break;
@@ -55,7 +55,7 @@ int main(int argc, char *argv[])
     para.filter_type = FullScanFilter::FS_Intensity;
     while (running)
     {
-        ret = device.GrabFullScanBlocking(scan_data, 1000);
+        ret = device.grabFullScanBlocking(scan_data, 1000);
         if (ret)
         {
             printf("count = %lld, point_num: %d\n", ++count, scan_data.vailtidy_point_num);
@@ -75,6 +75,6 @@ int main(int argc, char *argv[])
     }
 
 exit:
-    device.Disconnect();
+    device.disconnect();
     return 0;
 }

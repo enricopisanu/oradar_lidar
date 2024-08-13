@@ -14,7 +14,6 @@ void FullScanFilter::swap(uint16_t *a, uint16_t *b)
   *b = tmp;
 }
 
-// 排序
 void FullScanFilter::BubbleSort(uint16_t *data, int len)
 {
   for (int i = 0; i < len - 1; ++i) {
@@ -24,10 +23,9 @@ void FullScanFilter::BubbleSort(uint16_t *data, int len)
   }
 }
 
-/// 是否滤波范围内
 bool FullScanFilter::isValidRange(FilterPara ParaInf, uint16_t current_data)
 {
-  if (current_data >= ParaInf.minRange && current_data <= ParaInf.maxRange) { return true; }
+  if (current_data >= ParaInf.min_range && current_data <= ParaInf.max_range) { return true; }
 
   return false;
 }
@@ -36,8 +34,8 @@ bool FullScanFilter::isValidRange(FilterPara ParaInf, uint16_t current_data)
 void FullScanFilter::filter(const full_scan_data_st &in, FilterPara ParaInf, full_scan_data_st &out)
 {
 
-  //printf("filter_type:%d, %d,%d,%d,%d,%d,%d,%d,%d\n",ParaInf.filter_type, ParaInf.maxRange,ParaInf.minRange,\
-//ParaInf.Sigma_D,ParaInf.Sigma_R,ParaInf.IntesntiyFilterRange,ParaInf.Weak_Intensity_Th,ParaInf.Rotation,ParaInf.level);
+  //printf("filter_type:%d, %d,%d,%d,%d,%d,%d,%d,%d\n",ParaInf.filter_type, ParaInf.max_range,ParaInf.min_range,\
+//ParaInf.sigma_d,ParaInf.sigma_r,ParaInf.intensity_filter_range,ParaInf.weak_intensity_th,ParaInf.rotation,ParaInf.level);
   if (FS_Smooth == ParaInf.filter_type) {
     smooth_filter(in, ParaInf, out);
   } else if (FS_Bilateral == ParaInf.filter_type) {
@@ -70,11 +68,9 @@ void FullScanFilter::smooth_filter(const full_scan_data_st &in, FilterPara ParaI
       sum_value = 0.0;
       cnt = 0;
       for (int j = 0; j < window_size; j++) {
-        if (in.data[i + j - 2].distance == 0)
-          continue;
+        if (in.data[i + j - 2].distance == 0) continue;
 
-        if (abs(in.data[i].distance - in.data[i + j - 2].distance) < dis_threshold)
-        {
+        if (abs(in.data[i].distance - in.data[i + j - 2].distance) < dis_threshold) {
           cnt++;
           sum_value += in.data[i + j - 2].distance;
         }
@@ -103,7 +99,7 @@ void FullScanFilter::bilateral_filter(const full_scan_data_st &in, FilterPara Pa
   std::vector<uint16_t> temp_dists_data;
 
   temp_dists_data.resize(circle_len + w_r * 2);
-  
+
   for (i = 0, j = w_r; i < w_r; i++, j--) {
     temp_dists_data[i] = in.data[circle_len - j].distance;
     temp_dists_data[circle_len + i] = in.data[i].distance;
@@ -118,7 +114,7 @@ void FullScanFilter::bilateral_filter(const full_scan_data_st &in, FilterPara Pa
   // 空域核
   for (i = 0; i < w_r * 2 + 1; i++) {
     rx[i] = i - w_r;
-    w_spatial[i] = (float)exp(-1 * sqrt(rx[i] * rx[i]) / (2 * ParaInf.Sigma_D * ParaInf.Sigma_D));
+    w_spatial[i] = (float)exp(-1 * sqrt(rx[i] * rx[i]) / (2 * ParaInf.sigma_d * ParaInf.sigma_d));
   }
 
   // 值域核
@@ -134,9 +130,9 @@ void FullScanFilter::bilateral_filter(const full_scan_data_st &in, FilterPara Pa
         if (wins_data[j] != 0)/// 非零数据有效
         {
           Diff_R = current_data - wins_data[j];
-          // w_distance[j] = (float)exp(-1 * (0.003 * ParaInf.Sigma_D * (Diff_R * Diff_R)) / (2 * ParaInf.Sigma_R *
-          // ParaInf.Sigma_R));
-          w_distance[j] = (float)exp(-1 * ((Diff_R * Diff_R)) / (2 * ParaInf.Sigma_R * ParaInf.Sigma_R));
+          // w_distance[j] = (float)exp(-1 * (0.003 * ParaInf.sigma_d * (Diff_R * Diff_R)) / (2 * ParaInf.sigma_r *
+          // ParaInf.sigma_r));
+          w_distance[j] = (float)exp(-1 * ((Diff_R * Diff_R)) / (2 * ParaInf.sigma_r * ParaInf.sigma_r));
 
           w_s[j] = w_spatial[j] * w_distance[j];
 
@@ -144,7 +140,7 @@ void FullScanFilter::bilateral_filter(const full_scan_data_st &in, FilterPara Pa
           w_s_sum += w_s[j];
         }
       }
-      out.data[i - w_r].distance = w_d_sum / w_s_sum;// 滤波后结果
+      out.data[i - w_r].distance = w_d_sum / w_s_sum;
       w_d_sum = 0.0;
       w_s_sum = 0.0;
     }
@@ -155,7 +151,7 @@ void FullScanFilter::tail_filter(const full_scan_data_st &in, FilterPara ParaInf
 {
 
   out = in;
-  int count = in.vailtidy_point_num;// 一圈的点数
+  int count = in.vailtidy_point_num;
   if (count == 0) return;
 
   uint16_t diff_1, diff_2;
@@ -171,7 +167,7 @@ void FullScanFilter::tail_filter(const full_scan_data_st &in, FilterPara ParaInf
   // int filter_num_test = 0;
 
   // 转速
-  switch (ParaInf.Rotation) {
+  switch (ParaInf.rotation) {
 
   case 5:
     AngleResSin = 0.006981260297962;// sin(0.4);
@@ -220,22 +216,21 @@ void FullScanFilter::tail_filter(const full_scan_data_st &in, FilterPara ParaInf
   }
 
 
-  // 滤波强度
   switch (ParaInf.level) {
   case 0:
-    TanAngleThreshold = 0.140540834702391;// 8度
+    TanAngleThreshold = 0.140540834702391;
     PointNumThreshold = 2;
     break;
   case 1:
-    TanAngleThreshold = 0.267949192431123;// 15度
+    TanAngleThreshold = 0.267949192431123;
     PointNumThreshold = 2;
     break;
   case 2:
-    TanAngleThreshold = 0.324919696232906;// 18度
+    TanAngleThreshold = 0.324919696232906;
     PointNumThreshold = 2;
     break;
   case 3:
-    TanAngleThreshold = 0.363970234266202;// 20度
+    TanAngleThreshold = 0.363970234266202;
     PointNumThreshold = 1;
     break;
   }
@@ -253,12 +248,10 @@ void FullScanFilter::tail_filter(const full_scan_data_st &in, FilterPara ParaInf
         LeftPointDistanceCmp = in.data[i + j].distance;
         RightPointDistanceCmp = in.data[i - j].distance;
 
-        // 计算飞点
         if (diff_1 > 50 && diff_2 > 50) {
           // noise_abnormal++;     //暂时未使用
         }
 
-        // 计算拖尾
         double TanAngle = (range * AngleResSin) / (LeftPointDistanceCmp - range * AngleResCos);
         if (diff_1 > 20 && diff_1 < 80) {
 
@@ -271,7 +264,6 @@ void FullScanFilter::tail_filter(const full_scan_data_st &in, FilterPara ParaInf
         }
       }
 
-      // 过滤拖尾
       if (SumAbnormal >= PointNumThreshold) {
         out.data[i].distance = 0;
         // filter_num_test++;
@@ -291,12 +283,12 @@ void FullScanFilter::intensity_filter(const full_scan_data_st &in, FilterPara Pa
 {
   out = in;
   // int filter_num_test = 0;
-  int circle_len = in.vailtidy_point_num;// 一圈的点数
+  int circle_len = in.vailtidy_point_num;
   if (circle_len == 0) { return; }
 
   for (int i = 0; i < circle_len; i++) {
-    if (in.data[i].distance < ParaInf.IntesntiyFilterRange) {
-      if (in.data[i].intensity < -ParaInf.Weak_Intensity_Th) {
+    if (in.data[i].distance < ParaInf.intensity_filter_range) {
+      if (in.data[i].intensity < -ParaInf.weak_intensity_th) {
         out.data[i].distance = 0;
         // filter_num_test++;
       }

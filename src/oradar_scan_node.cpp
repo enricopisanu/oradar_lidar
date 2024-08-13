@@ -12,8 +12,12 @@ OradarScanNode::OradarScanNode(std::string node_name)
 
   double min_threshold = static_cast<double>(motor_speed_) - (static_cast<double>(motor_speed_) * 0.1);
   double max_threshold = static_cast<double>(motor_speed_) + (static_cast<double>(motor_speed_) * 0.1);
-  double current_speed = device_.GetRotationSpeed();
-  if (current_speed < min_threshold || current_speed > max_threshold) { device_.SetRotationSpeed(motor_speed_); }
+  double current_speed = device_.getRotationSpeed();
+  if (current_speed < min_threshold || current_speed > max_threshold) {
+    if (device_.setRotationSpeed(motor_speed_)) {
+      RCLCPP_INFO(this->get_logger(), "Set rotation speed to %d \n", motor_speed_);
+    }
+  }
 
 
   scan_pub_ = this->create_publisher<sensor_msgs::msg::LaserScan>(scan_topic_, 10);
@@ -55,22 +59,22 @@ bool OradarScanNode::connectToLidar()
     return false;
   }
 
-  device_.SetSerialPort(port_, baudrate_);
+  device_.setSerialPort(port_, baudrate_);
 
   RCLCPP_INFO(this->get_logger(), "Get lidar type: %s \n", device_model_.c_str());
   RCLCPP_INFO(this->get_logger(), "Get serial port: %s, baudrate: %d \n", port_.c_str(), baudrate_);
 
   while (rclcpp::ok()) {
     if (device_.isConnected()) {
-      device_.Disconnect();
-      RCLCPP_INFO(this->get_logger(), "Disconnect lidar _. \n");
+      device_.disconnect();
+      RCLCPP_INFO(this->get_logger(), "disconnect lidar _. \n");
     }
 
-    if (device_.Connect()) {
-      RCLCPP_INFO(this->get_logger(),"Lidar device connected successfully. \n");
+    if (device_.connect()) {
+      RCLCPP_INFO(this->get_logger(), "Lidar device connected successfully. \n");
       return true;
     } else {
-      RCLCPP_INFO(this->get_logger(),"Lidar device connecting... \n");
+      RCLCPP_INFO(this->get_logger(), "Lidar device connecting... \n");
       sleep(1);
     }
   }
@@ -88,7 +92,7 @@ void OradarScanNode::scanAndPublish()
 
   while (rclcpp::ok()) {
     start_scan_time = this->now();
-    grab = device_.GrabFullScanBlocking(scan_data, 1000);
+    grab = device_.grabFullScanBlocking(scan_data, 1000);
     scan_duration = (end_scan_time.seconds() - start_scan_time.seconds());
     if (grab) { publishScan(&scan_data, start_scan_time, scan_duration); }
   }
