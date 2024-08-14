@@ -50,20 +50,19 @@ public:
   [[nodiscard]] auto getDeviceSN(std::string &device_sn) -> bool;
 
 private:
-  static void mRxThreadProc(void *arg);
+  static void mRxThreadProc(OrdlidarDriver &lidar_obj);
   // int read(unsigned char *data, int length);
-  int write(unsigned char *data, int length);
-  bool uartDataHandle(unsigned char *data, int len);
-  void uartDataFindInitInfo(unsigned char *data, int len);
-  bool isFullScanReady() { return full_scan_ready_; }
-  void resetFullScanReady() { full_scan_ready_ = false; }
-  bool isOneScanReady() { return one_scan_ready_; }
-  void resetOneScanReady() { one_scan_ready_ = false; }
+  [[nodiscard]] auto write(unsigned char *data, int length) -> int;
+  [[nodiscard]] auto uartDataHandle(unsigned char *data, int len) -> bool;
+  auto uartDataFindInitInfo(unsigned char *data, int len) -> void;
+  [[nodiscard]] auto isFullScanReady() -> bool { return full_scan_ready_; }
+  auto resetFullScanReady() -> void { full_scan_ready_ = false; }
+  [[nodiscard]] auto isOneScanReady() -> bool { return one_scan_ready_; }
+  auto resetOneScanReady() -> void { one_scan_ready_ = false; }
   // int point_data_parse_frame_ms200(point_data_t *data, unsigned char *buf, unsigned short buf_len, float start_angle,
   // float end_angle);
-  int pointDataParseFrameMs200(point_data_t *data, OradarLidarFrame *pkg);
+ auto pointDataParseFrameMs200(point_data_t *data, OradarLidarFrame *pkg) -> void;
 
-private:
   static constexpr int SHORT_DELAY_MS = 200;
   static constexpr int MEDIUM_DELAY_MS = 400;
   static constexpr int LONG_DELAY_MS = 1000;

@@ -61,7 +61,7 @@ auto OrdlidarDriver::setSerialPort(const std::string &port_name, uint32_t baudra
 
     is_connected_ = true;
     rx_thread_exit_flag_ = false;
-    rx_thread_ = std::make_unique<std::thread>(mRxThreadProc, this);
+    rx_thread_ = std::make_unique<std::thread>([this]() { mRxThreadProc(*this); });
     delay(SHORT_DELAY_MS);
   }
 
@@ -147,7 +147,6 @@ void OrdlidarDriver::uartDataFindInitInfo(unsigned char *data, int len)
 
 bool OrdlidarDriver::uartDataHandle(unsigned char *data, int len)
 {
-  // printf("uartDataHandle, len= %d\n", len);
   for (int i = 0; i < len; i++) { bin_buf_.push_back(*(data + i)); }
 
   if (bin_buf_.size() < sizeof(OradarLidarFrame)) { return false; }
@@ -265,37 +264,36 @@ bool OrdlidarDriver::uartDataHandle(unsigned char *data, int len)
   return true;
 }
 
-void OrdlidarDriver::mRxThreadProc(void *arg)
+void OrdlidarDriver::mRxThreadProc(OrdlidarDriver &lidar_obj)
 {
-  OrdlidarDriver *lidar_ptr = (OrdlidarDriver *)arg;
   unsigned char readbuf[TMPBUFF_SIZE] = { 0 };
   size_t wait_size = 1;// sizeof(OradarLidarFrame);
   size_t retval, recv_size, actual_read;
-  while (!lidar_ptr->rx_thread_exit_flag_.load()) {
+  while (!lidar_obj.rx_thread_exit_flag_.load()) {
     // retval = lidar_ptr->serial_->available();
-    retval = lidar_ptr->serial_->waitfordata(wait_size, 500, &recv_size);
+    retval = lidar_obj.serial_->waitfordata(wait_size, 500, &recv_size);
     if (retval == 0) {
-      lidar_ptr->valid_data_ = true;
-      actual_read = lidar_ptr->serial_->readData(readbuf, recv_size);
+      lidar_obj.valid_data_ = true;
+      actual_read = lidar_obj.serial_->readData(readbuf, recv_size);
       if (actual_read > 0) {
-        switch (lidar_ptr->model_) {
+        switch (lidar_obj.model_) {
         case ORADAR_MS200: {
-          lidar_ptr->uartDataHandle(readbuf, actual_read);
-          if (lidar_ptr->init_info_flag_) { lidar_ptr->uartDataFindInitInfo(readbuf, actual_read); }
+          lidar_obj.uartDataHandle(readbuf, actual_read);
+          if (lidar_obj.init_info_flag_) { lidar_obj.uartDataFindInitInfo(readbuf, actual_read); }
           break;
         }
         }
       }
     } else {
-      lidar_ptr->valid_data_ = false;
+      lidar_obj.valid_data_ = false;
     }
   }
 }
 
-int OrdlidarDriver::pointDataParseFrameMs200(point_data_t *data, OradarLidarFrame *pkg)
+auto OrdlidarDriver::pointDataParseFrameMs200(point_data_t *data, OradarLidarFrame *pkg) -> void
 {
 
-  if (data == nullptr || pkg == nullptr) { return -1; }
+  if (data == nullptr || pkg == nullptr) { throw std::invalid_argument("Null pointer passed to someFunction"); }
 
   uint32_t diff = ((uint32_t)pkg->end_angle + 36000 - (uint32_t)pkg->start_angle) % 36000;
   float step = diff / (POINT_PER_PACK - 1) / 100.0;
@@ -314,7 +312,6 @@ int OrdlidarDriver::pointDataParseFrameMs200(point_data_t *data, OradarLidarFram
       data[i].angle = tmp_angle;
     }
   }
-  return 0;
 }
 #if 0
 	int OrdlidarDriver::pointDataParseFrameMs200(point_data_t *data, unsigned char *buf, unsigned short buf_len, float start_angle, float end_angle)
@@ -502,7 +499,7 @@ bool OrdlidarDriver::getFirmwareVersion(std::string &top_fw_version, std::string
   return false;
 }
 
- [[nodiscard]] auto OrdlidarDriver::deactive() -> bool
+[[nodiscard]] auto OrdlidarDriver::deactive() -> bool
 {
   uart_comm_t request;
   bool ret = false;
